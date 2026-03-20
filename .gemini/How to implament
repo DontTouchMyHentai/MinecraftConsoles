@@ -1,0 +1,1397 @@
+# DeepWiki Q&A with Code Context for Repository: DontTouchMyHentai/MinecraftConsoles
+## Q1
+How is the nether implemented in the game? Lets start with how the portal works, move to how the dimension is registered, and how they implement new generation for that dimension.
+### Answer
+# Nether Implementation
+
+Here is a full walkthrough of the Nether implementation across three areas: the portal mechanics, the dimension registration, and the world generation.
+
+---
+
+## 1. The Portal
+
+The nether portal system is split across two classes: `PortalTile` (the block itself) and `PortalForcer` (the teleportation logic).
+
+### PortalTile — Frame Validation & Spawning
+
+`PortalTile` extends `HalfTransparentTile` and is declared as a ticking tile. MinecraftConsoles:9-12 
+
+The key method is `trySpawnPortal()`. It first detects orientation — whether obsidian neighbours are on the X or Z axis. If both or neither axis has obsidian, it immediately returns false. MinecraftConsoles:70-78 
+
+It then validates the full 4×3 frame (including corners): the border positions must all be `Tile::obsidian_Id`, while the interior must be either air or `Tile::fire_Id`. If valid and `actuallySpawn` is true, it fills the 2×3 interior with `Tile::portalTile_Id`. MinecraftConsoles:85-117 
+
+`neighborChanged()` validates the frame's integrity on every block update, removing portal blocks if the obsidian structure is broken. MinecraftConsoles:120-167 
+
+When an entity steps inside a portal block, `entityInside()` calls `entity->handleInsidePortal()` (skipping experience orbs and ridden/riding entities). MinecraftConsoles:200-205 
+
+The portal also has a tick behavior: in a natural dimension (overworld), it has a chance each tick to spawn a Zombie Pigman (entity type 57) near the portal floor. MinecraftConsoles:14-37 
+
+### PortalForcer — Dimension Transfer
+
+`PortalForcer` handles the actual teleportation. Its `force()` method dispatches based on the dimension `id`. For The End (`id == 1`) it places an obsidian platform directly. For the Overworld/Nether it calls `findPortal()`, and if that fails, calls `createPortal()` then `findPortal()` again. MinecraftConsoles:28-68 
+
+`findPortal()` searches within a radius for an existing `Tile::portalTile_Id` block. The search radius is a 4J console-specific adjustment: **48 blocks in the Nether** and **128 blocks in the Overworld** (or 80 on PS Vita). MinecraftConsoles:71-87 
+
+Results are cached by chunk hash to avoid repeated scans. MinecraftConsoles:96-110 
+
+`createPortal()` finds a valid location within `16 * 3` blocks and constructs a full obsidian frame + `portalTile_Id` interior. It also includes 4J-specific edge clamping to prevent portals from being built inside the bedrock border walls. MinecraftConsoles:260-295 
+
+---
+
+## 2. Dimension Registration
+
+### Dimension IDs
+
+The three dimension IDs are formally defined as an enum in `LevelData`: MinecraftConsoles:76-81 
+
+### Factory Method
+
+`Dimension::getNew(int id)` is the factory that maps `id == -1` to a new `HellDimension`, `0` to `NormalDimension`, and `1` to `TheEndDimension`. MinecraftConsoles:189-196 
+
+### HellDimension::init()
+
+`HellDimension::init()` sets all Nether-specific properties:
+- `biomeSource` is a `FixedBiomeSource` locked to `Biome::hell` (meaning the entire dimension uses only the hell biome)
+- `ultraWarm = true` (water evaporates instantly)
+- `hasCeiling = true` (enables the bedrock ceiling)
+- `id = -1` (the dimension's numeric identity) MinecraftConsoles:11-17 
+
+Other `HellDimension` overrides enforce Nether-specific behaviors:
+- `isNaturalDimension()` returns `false` — prevents day/night cycle and natural spawns
+- `isValidSpawn()` returns `false` — players cannot set spawn in the Nether
+- `mayRespawn()` returns `false` — beds explode instead of setting spawn
+- `isFoggyAt()` always returns `true` — constant fog everywhere
+- `getTimeOfDay()` always returns `0.5f` — frozen sky at midday MinecraftConsoles:61-84 
+
+The fog color is read from a `ColourTable` using the `eMinecraftColour_Nether_Fog_Colour` key. MinecraftConsoles:19-30 
+
+The ambient light ramp is set with a minimum brightness of `0.10f` (the Nether is never pitch black). MinecraftConsoles:32-40 
+
+### Choosing a Level Source
+
+`HellDimension::createRandomLevelSource()` selects the generation backend: `HellFlatLevelSource` for superflat/debug worlds, or `HellRandomLevelSource` (the default procedural generator) for normal worlds. MinecraftConsoles:42-59 
+
+### Console-Specific: Scaled World Size
+
+`HellDimension::getXZSize()` computes the Nether's chunk extent by dividing the overworld size by `hellScale` (a 4J-exclusive field from `LevelData`), making the Nether proportionally smaller than the overworld. MinecraftConsoles:86-89 
+
+### Aggregate Header
+
+All three dimensions are collected in a single convenience header: MinecraftConsoles:1-6 
+
+### Biome
+
+`HellBiome` clears all normal mob lists and registers only three mob spawners — Ghasts (weight 50), Zombie Pigmen (weight 100), and Magma Cubes/`LavaSlime` (weight 1). MinecraftConsoles:5-17 
+
+---
+
+## 3. World Generation
+
+The primary generator is `HellRandomLevelSource`, which extends `ChunkSource`.
+
+### Constructor — Noise Setup
+
+The constructor initializes multiple layered `PerlinNoise` instances for terrain:
+- `lperlinNoise1`, `lperlinNoise2` — 16-octave large-scale noise
+- `perlinNoise1` — 8 octaves
+- `perlinNoise2`, `perlinNoise3` — 4 octaves each (used for soul sand/gravel surface decoration)
+- `scaleNoise` — 10 octaves
+- `depthNoise` — 16 octaves
+
+It also instantiates `NetherBridgeFeature` and `LargeHellCaveFeature`. MinecraftConsoles:10-31 
+
+### getChunk() — Main Pipeline
+
+Each chunk goes through this pipeline:
+1. `prepareHeights()` — fills in the raw 3D block volume
+2. `buildSurfaces()` — applies surface decoration
+3. `caveFeature->apply()` — carves caves using `LargeHellCaveFeature`
+4. `netherBridgeFeature->apply()` — carves/places Nether Fortress structures MinecraftConsoles:270-293 
+
+### prepareHeights() — 3D Noise Fill
+
+`prepareHeights()` calls `getHeights()` to get a trilinearly-interpolated 3D noise field. Each cell becomes `calmLava` if below `y=32`, `netherRack` if the noise value is `> 0`, or air otherwise. MinecraftConsoles:50-124 
+
+`getHeights()` itself samples `scaleNoise` and `depthNoise` for horizontal shaping and uses `lperlinNoise1`, `lperlinNoise2`, and `perlinNoise1` for the vertical noise field. A cosine Y-offset curve creates the characteristic hollow-cavern feel. MinecraftConsoles:304-416 
+
+### buildSurfaces() — Surface Decoration
+
+Samples `perlinNoise2` for soul sand/gravel placement and `perlinNoise3` for surface depth. Near the `waterHeight` level (`genDepth - 64`):
+- Gravel is substituted for the top `netherRack` layer based on noise
+- Soul sand is placed on sand-flagged columns
+- A 1-in-16 chance places nether wart on top of soul sand (a 4J addition)
+
+The ceiling and floor are randomly replaced with `Tile::unbreakable_Id` (bedrock) at the top and bottom few layers.
+
+4J also builds solid **bedrock boundary walls** around the finite console world at the computed `m_XZSize` boundary. MinecraftConsoles:126-263 
+
+### LargeHellCaveFeature — Cave Carving
+
+`LargeHellCaveFeature` extends `LargeFeature` and carves tunnels using a worm algorithm with `addRoom()` and `addTunnel()`. Tunnels can split at a random `splitPoint`. The carver checks for adjacent lava (`calmLava_Id` / `lava_Id`) before carving to avoid draining lava lakes into caves. MinecraftConsoles:6-181 
+
+### postProcess() — Feature Placement
+
+After chunk creation, `postProcess()` scatters world features using a dedicated `pprandom` (a separate random with the same seed, added by 4J for thread-safe parallel post-processing):
+- Lava springs via `HellSpringFeature` (8 per chunk)
+- Fire patches via `HellFireFeature`
+- Glowstone clusters via `LightGemFeature`
+- Glowstone formations via `HellPortalFeature` (up to 10 per chunk)
+- Brown and red mushrooms via `FlowerFeature`
+- Nether quartz ore via `OreFeature` (16 veins of size 13)
+- Additional enclosed lava springs via `HellSpringFeature` with `insideRock = true` MinecraftConsoles:423-511 
+
+### Mob Spawning — Nether Bridge Override
+
+`getMobsAt()` checks whether the requested coordinates are inside (or on the floor of) a `NetherBridgeFeature` bounding box. If so, it returns the bridge-specific enemy list instead of the standard biome list. MinecraftConsoles:534-555 
+
+---
+
+## Architecture Summary
+
+```mermaid
+graph TD
+    "Dimension::getNew(-1)" --> "HellDimension"
+    "HellDimension::init()" --> "FixedBiomeSource(Biome::hell)"
+    "HellDimension::createRandomLevelSource()" --> "HellRandomLevelSource"
+    "HellDimension::createRandomLevelSource()" --> "HellFlatLevelSource"
+    "HellRandomLevelSource::getChunk()" --> "prepareHeights()"
+    "HellRandomLevelSource::getChunk()" --> "buildSurfaces()"
+    "HellRandomLevelSource::getChunk()" --> "LargeHellCaveFeature"
+    "HellRandomLevelSource::getChunk()" --> "NetherBridgeFeature"
+    "HellRandomLevelSource::postProcess()" --> "HellSpringFeature"
+    "HellRandomLevelSource::postProcess()" --> "HellFireFeature"
+    "HellRandomLevelSource::postProcess()" --> "LightGemFeature"
+    "HellRandomLevelSource::postProcess()" --> "HellPortalFeature"
+    "HellRandomLevelSource::postProcess()" --> "OreFeature(netherQuartz)"
+    "PortalTile::entityInside()" --> "Entity::handleInsidePortal()"
+    "Entity::handleInsidePortal()" --> "PortalForcer::force()"
+    "PortalForcer::force()" --> "PortalForcer::findPortal()"
+    "PortalForcer::force()" --> "PortalForcer::createPortal()"
+```
+
+---
+
+## Notes
+
+- The internal code name throughout the codebase is `Hell` (e.g. `HellDimension`, `HellBiome`, `HellRandomLevelSource`), not "Nether". These refer to the same dimension.
+- `HellPortalFeature` is **not** the nether portal block — it is a world generation feature that places glowstone formations that look like portals. The actual portal block is `PortalTile`.
+- The `m_XZSize` / `hellScale` system is a **4J console-exclusive** addition to make the finite-world Nether proportionally smaller than the overworld, and to add bedrock boundary walls at its edges. This does not exist in vanilla Java Minecraft.
+- A second `Random* pprandom` separate from `random` is another 4J addition to allow `postProcess()` to run in parallel with `getChunk()` without race conditions.
+### Citations
+**File:** Minecraft.World/PortalTile.cpp (L9-12)
+```cpp
+PortalTile::PortalTile(int id) : HalfTransparentTile(id, L"portal", Material::portal, false)
+{
+	setTicking(true);
+}
+```
+**File:** Minecraft.World/PortalTile.cpp (L14-37)
+```cpp
+void PortalTile::tick(Level *level, int x, int y, int z, Random *random)
+{
+	HalfTransparentTile::tick(level, x, y, z, random);
+
+	if (level->dimension->isNaturalDimension() && random->nextInt(2000) < level->difficulty)
+	{
+		// locate floor
+		int y0 = y;
+		while (!level->isTopSolidBlocking(x, y0, z) && y0 > 0)
+		{
+			y0--;
+		}
+		if (y0 > 0 && !level->isSolidBlockingTile(x, y0 + 1, z))
+		{
+			// spawn a pig man here
+			int iResult = 0;
+			shared_ptr<Entity> entity = SpawnEggItem::spawnMobAt(level, 57, x + .5, y0 + 1.1, z + .5, &iResult);
+			if (entity != nullptr)
+			{
+				entity->changingDimensionDelay = entity->getDimensionChangingDelay();
+			}
+		}
+	}
+}
+```
+**File:** Minecraft.World/PortalTile.cpp (L70-78)
+```cpp
+bool PortalTile::trySpawnPortal(Level *level, int x, int y, int z, bool actuallySpawn)
+{
+	int xd = 0;
+	int zd = 0;
+	if (level->getTile(x - 1, y, z) == Tile::obsidian_Id || level->getTile(x + 1, y, z) == Tile::obsidian_Id) xd = 1;
+	if (level->getTile(x, y, z - 1) == Tile::obsidian_Id || level->getTile(x, y, z + 1) == Tile::obsidian_Id) zd = 1;
+
+	if (xd == zd) return false;
+
+```
+**File:** Minecraft.World/PortalTile.cpp (L85-117)
+```cpp
+	for (int xx = -1; xx <= 2; xx++)
+	{
+		for (int yy = -1; yy <= 3; yy++)
+		{
+			bool edge = (xx == -1) || (xx == 2) || (yy == -1) || (yy == 3);
+			if ((xx == -1 || xx == 2) && (yy == -1 || yy == 3)) continue;
+
+			int t = level->getTile(x + xd * xx, y + yy, z + zd * xx);
+
+			if (edge)
+			{
+				if (t != Tile::obsidian_Id) return false;
+			}
+			else
+			{
+				if (t != 0 && t != Tile::fire_Id) return false;
+			}
+		}
+	}
+
+	if( !actuallySpawn )
+		return true;
+
+	for (int xx = 0; xx < 2; xx++)
+	{
+		for (int yy = 0; yy < 3; yy++)
+		{
+			level->setTileAndData(x + xd * xx, y + yy, z + zd * xx, Tile::portalTile_Id, 0, Tile::UPDATE_CLIENTS);
+		}
+	}
+
+	return true;
+
+```
+**File:** Minecraft.World/PortalTile.cpp (L120-167)
+```cpp
+void PortalTile::neighborChanged(Level *level, int x, int y, int z, int type)
+{
+	int xd = 0;
+	int zd = 1;
+	if (level->getTile(x - 1, y, z) == id || level->getTile(x + 1, y, z) == id)
+	{
+		xd = 1;
+		zd = 0;
+	}
+
+	int yBottom = y;
+	while (level->getTile(x, yBottom - 1, z) == id)
+		yBottom--;
+
+	if (level->getTile(x, yBottom - 1, z) != Tile::obsidian_Id)
+	{
+		level->removeTile(x, y, z);
+		return;
+	}
+
+	int height = 1;
+	while (height < 4 && level->getTile(x, yBottom + height, z) == id)
+		height++;
+
+	if (height != 3 || level->getTile(x, yBottom + height, z) != Tile::obsidian_Id)
+	{
+		level->removeTile(x, y, z);
+		return;
+	}
+
+	bool we = level->getTile(x - 1, y, z) == id || level->getTile(x + 1, y, z) == id;
+	bool ns = level->getTile(x, y, z - 1) == id || level->getTile(x, y, z + 1) == id;
+	if (we && ns)
+	{
+		level->removeTile(x, y, z);
+		return;
+	}
+
+	if (!(//
+		(level->getTile(x + xd, y, z + zd) == Tile::obsidian_Id && level->getTile(x - xd, y, z - zd) == id) || //
+		(level->getTile(x - xd, y, z - zd) == Tile::obsidian_Id && level->getTile(x + xd, y, z + zd) == id)//
+		))
+	{
+		level->removeTile(x, y, z);
+		return;
+	}
+
+}
+```
+**File:** Minecraft.World/PortalTile.cpp (L200-205)
+```cpp
+void PortalTile::entityInside(Level *level, int x, int y, int z, shared_ptr<Entity> entity)
+{
+	if (entity->GetType() == eTYPE_EXPERIENCEORB ) return;		// 4J added
+
+	if (entity->riding == nullptr && entity->rider.lock() == nullptr) entity->handleInsidePortal();
+}
+```
+**File:** Minecraft.World/PortalForcer.cpp (L28-68)
+```cpp
+void PortalForcer::force(shared_ptr<Entity> e, double xOriginal, double yOriginal, double zOriginal, float yRotOriginal)
+{
+	if (level->dimension->id == 1)
+	{
+		int x = Mth::floor(e->x);
+		int y = Mth::floor(e->y) - 1;
+		int z = Mth::floor(e->z);
+
+		int xa = 1;
+		int za = 0;
+		for (int b = -2; b <= 2; b++)
+		{
+			for (int s = -2; s <= 2; s++)
+			{
+				for (int h = -1; h < 3; h++)
+				{
+					int xt = x + s * xa + b * za;
+					int yt = y + h;
+					int zt = z + s * za - b * xa;
+
+					bool border = h < 0;
+
+					level->setTileAndUpdate(xt, yt, zt, border ? Tile::obsidian_Id : 0);
+				}
+			}
+		}
+
+		e->moveTo(x, y, z, e->yRot, 0);
+		e->xd = e->yd = e->zd = 0;
+
+		return;
+	}
+
+	if (findPortal(e, xOriginal, yOriginal, zOriginal, yRotOriginal))
+	{
+		return;
+	}
+
+	createPortal(e);
+	findPortal(e, xOriginal, yOriginal, zOriginal, yRotOriginal);
+}
+```
+**File:** Minecraft.World/PortalForcer.cpp (L71-87)
+```cpp
+bool PortalForcer::findPortal(shared_ptr<Entity> e, double xOriginal, double yOriginal, double zOriginal, float yRotOriginal)
+{
+	// 4J Stu - Decrease the range at which we search for a portal in the nether given our smaller nether
+	int r = 16;//* 8;
+	if(level->dimension->id == -1)
+	{
+		r *= 3;
+	}
+	else
+	{
+#ifdef __PSVITA__
+		// AP poor little Vita takes 30 seconds to leave the Nether. This should help
+		r *= 5;
+#else
+		r *= 8;
+#endif
+	}
+```
+**File:** Minecraft.World/PortalForcer.cpp (L96-110)
+```cpp
+	long hash = ChunkPos::hashCode(xc, zc);
+	bool updateCache = true;
+
+    auto it = cachedPortals.find(hash);
+    if (it != cachedPortals.end())
+	{
+		PortalPosition *pos = it->second;
+
+		closest = 0;
+		xTarget = pos->x;
+		yTarget = pos->y;
+		zTarget = pos->z;
+		pos->lastUsed = level->getGameTime();
+		updateCache = false;
+	}
+```
+**File:** Minecraft.World/PortalForcer.cpp (L260-295)
+```cpp
+bool PortalForcer::createPortal(shared_ptr<Entity> e)
+{
+	// 4J Stu - Increase the range at which we try and create a portal to stop creating them floating in mid air over lava
+	int r = 16 * 3;
+	double closest = -1;
+
+	int xc = Mth::floor(e->x);
+	int yc = Mth::floor(e->y);
+	int zc = Mth::floor(e->z);
+
+	// 4J Stu - Changes to stop Portals being created at the border of the nether inside the bedrock
+	int XZSIZE = level->dimension->getXZSize() * 16; // XZSize is chunks, convert to blocks
+	int XZOFFSET = (XZSIZE / 2) - 4; // Subtract 4 to stay away from the edges // TODO Make the 4 a constant in HellRandomLevelSource
+
+	// Move the positions that we want to check away from the edge of the world
+	if( (xc - r) < -XZOFFSET )
+	{
+		app.DebugPrintf("Adjusting portal creation x due to being too close to the edge\n");
+		xc -= ( (xc - r) + XZOFFSET);
+	}
+	else if ( (xc + r) >= XZOFFSET )
+	{
+		app.DebugPrintf("Adjusting portal creation x due to being too close to the edge\n");
+		xc -= ( (xc + r) - XZOFFSET);
+	}
+	if( (zc - r) < -XZOFFSET )
+	{
+		app.DebugPrintf("Adjusting portal creation z due to being too close to the edge\n");
+		zc -= ( (zc - r) + XZOFFSET);
+	}
+	else if ( (zc + r) >= XZOFFSET )
+	{
+		app.DebugPrintf("Adjusting portal creation z due to being too close to the edge\n");
+		zc -= ( (zc + r) - XZOFFSET);
+	}
+
+```
+**File:** Minecraft.World/LevelData.h (L76-81)
+```text
+	enum
+	{
+		DIMENSION_NETHER=-1,
+		DIMENSION_OVERWORLD=0,
+		DIMENSION_END=1
+	};
+```
+**File:** Minecraft.World/Dimension.cpp (L189-196)
+```cpp
+Dimension *Dimension::getNew(int id)
+{
+	if (id == -1) return new HellDimension();
+	if (id == 0) return new NormalDimension();
+	if (id == 1) return new TheEndDimension();
+
+	return nullptr;
+}
+```
+**File:** Minecraft.World/HellDimension.cpp (L11-17)
+```cpp
+void HellDimension::init()
+{
+    biomeSource = new FixedBiomeSource(Biome::hell, 1, 0);
+    ultraWarm = true;
+    hasCeiling = true;
+    id = -1;
+}
+```
+**File:** Minecraft.World/HellDimension.cpp (L19-30)
+```cpp
+Vec3 *HellDimension::getFogColor(float td, float a) const
+{
+	int colour = Minecraft::GetInstance()->getColourTable()->getColor( eMinecraftColour_Nether_Fog_Colour );
+	byte redComponent = ((colour>>16)&0xFF);
+	byte greenComponent = ((colour>>8)&0xFF);
+	byte blueComponent = ((colour)&0xFF);
+
+	float rr = static_cast<float>(redComponent)/256;//0.2f;
+	float gg = static_cast<float>(greenComponent)/256;//0.03f;
+	float bb = static_cast<float>(blueComponent)/256;//0.03f;
+	return Vec3::newTemp(rr, gg, bb);
+}
+```
+**File:** Minecraft.World/HellDimension.cpp (L32-40)
+```cpp
+void HellDimension::updateLightRamp()
+{
+    float ambientLight = 0.10f;
+    for (int i = 0; i <= Level::MAX_BRIGHTNESS; i++)
+	{
+        float v = (1 - i / static_cast<float>(Level::MAX_BRIGHTNESS));
+        brightnessRamp[i] = ((1 - v) / (v * 3 + 1)) * (1 - ambientLight) + ambientLight;
+    }
+}
+```
+**File:** Minecraft.World/HellDimension.cpp (L42-59)
+```cpp
+ChunkSource *HellDimension::createRandomLevelSource() const
+{
+#ifdef _DEBUG_MENUS_ENABLED
+	if(app.DebugSettingsOn() && app.GetGameSettingsDebugMask(ProfileManager.GetPrimaryPad())&(1L<<eDebugSetting_SuperflatNether))
+	{
+		return new HellFlatLevelSource(level, level->getSeed());
+	}
+	else
+#endif
+	if (levelType == LevelType::lvl_flat)
+	{
+		return new HellFlatLevelSource(level, level->getSeed());
+	}
+	else
+	{
+		return new HellRandomLevelSource(level, level->getSeed());
+	}
+}
+```
+**File:** Minecraft.World/HellDimension.cpp (L61-84)
+```cpp
+bool HellDimension::isNaturalDimension()
+{
+	return false;
+}
+
+bool HellDimension::isValidSpawn(int x, int z) const
+{
+    return false;
+}
+
+float HellDimension::getTimeOfDay(int64_t time, float a) const
+{
+	return 0.5f;
+}
+
+bool HellDimension::mayRespawn() const
+{
+	return false;
+}
+
+bool HellDimension::isFoggyAt(int x, int z)
+{
+	return true;
+}
+```
+**File:** Minecraft.World/HellDimension.cpp (L86-89)
+```cpp
+int HellDimension::getXZSize()
+{
+	return ceil(static_cast<float>(level->getLevelData()->getXZSize()) / level->getLevelData()->getHellScale());
+}
+```
+**File:** Minecraft.World/net.minecraft.world.level.dimension.h (L1-6)
+```text
+#pragma once
+
+#include "Dimension.h"
+#include "HellDimension.h"
+#include "NormalDimension.h"
+#include "TheEndDimension.h"
+```
+**File:** Minecraft.World/HellBiome.cpp (L5-17)
+```cpp
+HellBiome::HellBiome(int id) : Biome(id)
+{
+	enemies.clear();
+	friendlies.clear();
+	friendlies_chicken.clear();	// 4J added
+	friendlies_wolf.clear(); 	// 4J added
+	waterFriendlies.clear();
+	ambientFriendlies.clear();
+
+	enemies.push_back(new MobSpawnerData(eTYPE_GHAST, 50, 4, 4));
+	enemies.push_back(new MobSpawnerData(eTYPE_PIGZOMBIE, 100, 4, 4));
+	enemies.push_back(new MobSpawnerData(eTYPE_LAVASLIME, 1, 4, 4));
+}
+```
+**File:** Minecraft.World/HellRandomLevelSource.cpp (L10-31)
+```cpp
+HellRandomLevelSource::HellRandomLevelSource(Level *level, int64_t seed)
+{
+	int xzSize = level->getLevelData()->getXZSize();
+	int hellScale = level->getLevelData()->getHellScale();
+	m_XZSize = ceil(static_cast<float>(xzSize) / hellScale);
+
+	netherBridgeFeature = new NetherBridgeFeature();
+	caveFeature = new LargeHellCaveFeature();
+
+	this->level = level;
+
+	random = new Random(seed);
+	pprandom = new Random(seed);	// 4J - added, so that we can have a separate random for doing post-processing in parallel with creation
+	lperlinNoise1 = new PerlinNoise(random, 16);
+	lperlinNoise2 = new PerlinNoise(random, 16);
+	perlinNoise1 = new PerlinNoise(random, 8);
+	perlinNoise2 = new PerlinNoise(random, 4);
+	perlinNoise3 = new PerlinNoise(random, 4);
+
+	scaleNoise = new PerlinNoise(random, 10);
+	depthNoise = new PerlinNoise(random, 16);
+}
+```
+**File:** Minecraft.World/HellRandomLevelSource.cpp (L50-124)
+```cpp
+void HellRandomLevelSource::prepareHeights(int xOffs, int zOffs, byteArray blocks)
+{
+	int xChunks = 16 / CHUNK_WIDTH;
+	int waterHeight = 32;
+
+	int xSize = xChunks + 1;
+	int ySize = Level::genDepth / CHUNK_HEIGHT + 1;
+	int zSize = xChunks + 1;
+	doubleArray buffer;	// 4J - used to be declared with class level scope but tidying up for thread safety reasons
+	buffer = getHeights(buffer, xOffs * xChunks, 0, zOffs * xChunks, xSize, ySize, zSize);
+
+	for (int xc = 0; xc < xChunks; xc++)
+	{
+		for (int zc = 0; zc < xChunks; zc++)
+		{
+			for (int yc = 0; yc < Level::genDepth / CHUNK_HEIGHT; yc++)
+			{
+				double yStep = 1 / static_cast<double>(CHUNK_HEIGHT);
+				double s0 = buffer[((xc + 0) * zSize + (zc + 0)) * ySize + (yc + 0)];
+				double s1 = buffer[((xc + 0) * zSize + (zc + 1)) * ySize + (yc + 0)];
+				double s2 = buffer[((xc + 1) * zSize + (zc + 0)) * ySize + (yc + 0)];
+				double s3 = buffer[((xc + 1) * zSize + (zc + 1)) * ySize + (yc + 0)];
+
+				double s0a = (buffer[((xc + 0) * zSize + (zc + 0)) * ySize + (yc + 1)] - s0) * yStep;
+				double s1a = (buffer[((xc + 0) * zSize + (zc + 1)) * ySize + (yc + 1)] - s1) * yStep;
+				double s2a = (buffer[((xc + 1) * zSize + (zc + 0)) * ySize + (yc + 1)] - s2) * yStep;
+				double s3a = (buffer[((xc + 1) * zSize + (zc + 1)) * ySize + (yc + 1)] - s3) * yStep;
+
+				for (int y = 0; y < CHUNK_HEIGHT; y++)
+				{
+					double xStep = 1 / static_cast<double>(CHUNK_WIDTH);
+
+					double _s0 = s0;
+					double _s1 = s1;
+					double _s0a = (s2 - s0) * xStep;
+					double _s1a = (s3 - s1) * xStep;
+
+					for (int x = 0; x < CHUNK_WIDTH; x++)
+					{
+						int offs = (x + xc * CHUNK_WIDTH) << Level::genDepthBitsPlusFour | (0 + zc * CHUNK_WIDTH) << Level::genDepthBits | (yc * CHUNK_HEIGHT + y);
+						int step = 1 << Level::genDepthBits;
+						double zStep = 1 / static_cast<double>(CHUNK_WIDTH);
+
+						double val = _s0;
+						double vala = (_s1 - _s0) * zStep;
+						for (int z = 0; z < CHUNK_WIDTH; z++)
+						{
+							int tileId = 0;
+							if (yc * CHUNK_HEIGHT + y < waterHeight)
+							{
+								tileId = Tile::calmLava_Id;
+							}
+							if (val > 0)
+							{
+								tileId = Tile::netherRack_Id;
+							}
+
+							blocks[offs] = static_cast<byte>(tileId);
+							offs += step;
+							val += vala;
+						}
+						_s0 += _s0a;
+						_s1 += _s1a;
+					}
+
+					s0 += s0a;
+					s1 += s1a;
+					s2 += s2a;
+					s3 += s3a;
+				}
+			}
+		}
+	}
+	delete [] buffer.data;
+}
+```
+**File:** Minecraft.World/HellRandomLevelSource.cpp (L126-263)
+```cpp
+void HellRandomLevelSource::buildSurfaces(int xOffs, int zOffs, byteArray blocks)
+{
+	int waterHeight = Level::genDepth - 64;
+
+	double s = 1 / 32.0;
+
+	doubleArray sandBuffer(16*16);	// 4J - used to be declared with class level scope but moved here for thread safety
+	doubleArray gravelBuffer(16*16);
+	doubleArray depthBuffer(16*16);
+
+	sandBuffer = perlinNoise2->getRegion(sandBuffer, xOffs * 16, zOffs * 16, 0, 16, 16, 1, s, s, 1);
+	gravelBuffer = perlinNoise2->getRegion(gravelBuffer, xOffs * 16, 109, zOffs * 16, 16, 1, 16, s, 1, s);
+	depthBuffer = perlinNoise3->getRegion(depthBuffer, xOffs * 16, zOffs * 16, 0, 16, 16, 1, s * 2, s * 2, s * 2);
+
+	for (int x = 0; x < 16; x++)
+	{
+		for (int z = 0; z < 16; z++)
+		{
+			bool sand = (sandBuffer[x + z * 16] + random->nextDouble() * 0.2) > 0;
+			bool gravel = (gravelBuffer[x + z * 16] + random->nextDouble() * 0.2) > 0;
+			int runDepth = static_cast<int>(depthBuffer[x + z * 16] / 3 + 3 + random->nextDouble() * 0.25);
+
+			int run = -1;
+
+			byte top = (byte) Tile::netherRack_Id;
+			byte material = (byte) Tile::netherRack_Id;
+
+			for (int y = Level::genDepthMinusOne; y >= 0; y--)
+			{
+				int offs = (z * 16 + x) * Level::genDepth + y;
+
+				// 4J Build walls around the level
+				bool blockSet = false;
+				if(xOffs <= -(m_XZSize/2))
+				{
+					if( z - random->nextInt( 4 ) <= 0 || xOffs < -(m_XZSize/2) )
+					{
+						blocks[offs] = static_cast<byte>(Tile::unbreakable_Id);
+						blockSet = true;
+					}
+				}
+				if(zOffs <= -(m_XZSize/2))
+				{
+					if( x - random->nextInt( 4 ) <= 0 || zOffs < -(m_XZSize/2))
+					{
+						blocks[offs] = static_cast<byte>(Tile::unbreakable_Id);
+						blockSet = true;
+					}
+				}
+				if(xOffs >= (m_XZSize/2)-1)
+				{
+					if( z + random->nextInt(4) >= 15 || xOffs > (m_XZSize/2))
+					{
+						blocks[offs] = static_cast<byte>(Tile::unbreakable_Id);
+						blockSet = true;
+					}
+				}
+				if(zOffs >= (m_XZSize/2)-1)
+				{
+					if( x + random->nextInt(4) >= 15 || zOffs > (m_XZSize/2) )
+					{
+						blocks[offs] = static_cast<byte>(Tile::unbreakable_Id);
+						blockSet = true;
+					}
+				}
+				if( blockSet ) continue;
+				// End 4J Extra to build walls around the level
+
+				if (y >= Level::genDepthMinusOne - random->nextInt(5) || y <= 0 + random->nextInt(5))
+				{
+					blocks[offs] = static_cast<byte>(Tile::unbreakable_Id);
+				}
+				else
+				{
+					int old = blocks[offs];
+
+					if (old == 0)
+					{
+						run = -1;
+					}
+					else if (old == Tile::netherRack_Id)
+					{
+						if (run == -1)
+						{
+							if (runDepth <= 0)
+							{
+								top = 0;
+								material = static_cast<byte>(Tile::netherRack_Id);
+							}
+							else if (y >= waterHeight - 4 && y <= waterHeight + 1)
+							{
+								top = static_cast<byte>(Tile::netherRack_Id);
+								material = static_cast<byte>(Tile::netherRack_Id);
+								if (gravel) top = static_cast<byte>(Tile::gravel_Id);
+								if (gravel) material = static_cast<byte>(Tile::netherRack_Id);
+								if (sand)
+								{
+									// 4J Stu - Make some nether wart spawn outside of the nether fortresses
+									if(random->nextInt(16) == 0)
+									{
+										top = static_cast<byte>(Tile::netherStalk_Id);
+
+										// Place the nether wart on top of the soul sand
+										y += 1;
+										int genDepthMinusOne = Level::genDepthMinusOne; // Take into local int for PS4 as min takes a reference to the const int there and then needs the value to exist for the linker
+										y = min(y, genDepthMinusOne);
+										runDepth += 1;
+										offs = (z * 16 + x) * Level::genDepth + y;
+									}
+									else
+									{
+										top = static_cast<byte>(Tile::soulsand_Id);
+									}
+								}
+								if (sand) material = static_cast<byte>(Tile::soulsand_Id);
+							}
+
+							if (y < waterHeight && top == 0) top = static_cast<byte>(Tile::calmLava_Id);
+
+							run = runDepth;
+							// 4J Stu - If sand, then allow adding nether wart at heights below the water level
+							if (y >= waterHeight - 1 || sand) blocks[offs] = top;
+							else blocks[offs] = material;
+						}
+						else if (run > 0)
+						{
+							run--;
+							blocks[offs] = material;
+						}
+					}
+				}
+			}
+		}
+	}
+	delete [] sandBuffer.data;
+	delete [] gravelBuffer.data;
+	delete [] depthBuffer.data;
+}
+```
+**File:** Minecraft.World/HellRandomLevelSource.cpp (L270-293)
+```cpp
+LevelChunk *HellRandomLevelSource::getChunk(int xOffs, int zOffs)
+{
+	random->setSeed(xOffs * 341873128712l + zOffs * 132897987541l);
+
+	// 4J - now allocating this with a physical alloc & bypassing general memory management so that it will get cleanly freed
+	int blocksSize = Level::genDepth * 16 * 16;
+	byte *tileData = static_cast<byte *>(XPhysicalAlloc(blocksSize, MAXULONG_PTR, 4096, PAGE_READWRITE));
+	XMemSet128(tileData,0,blocksSize);
+	byteArray blocks = byteArray(tileData,blocksSize);
+	//    byteArray blocks = byteArray(16 * level->depth * 16);
+
+	prepareHeights(xOffs, zOffs, blocks);
+	buildSurfaces(xOffs, zOffs, blocks);
+
+	caveFeature->apply(this, level, xOffs, zOffs, blocks);
+	netherBridgeFeature->apply(this, level, xOffs, zOffs, blocks);
+
+	// 4J - this now creates compressed block data from the blocks array passed in, so needs to be after data is finalised.
+	// Also now need to free the passed in blocks as the LevelChunk doesn't use the passed in allocation anymore.
+	LevelChunk *levelChunk = new LevelChunk(level, blocks, xOffs, zOffs);
+	levelChunk->setCheckAllLight();
+	XPhysicalFree(tileData);
+	return levelChunk;
+}
+```
+**File:** Minecraft.World/HellRandomLevelSource.cpp (L304-416)
+```cpp
+doubleArray HellRandomLevelSource::getHeights(doubleArray buffer, int x, int y, int z, int xSize, int ySize, int zSize)
+{
+	if (buffer.data == nullptr)
+	{
+		buffer = doubleArray(xSize * ySize * zSize);
+	}
+
+	double s = 1 * 684.412;
+	double hs = 1 * 684.412 * 3;
+
+	doubleArray pnr, ar, br, sr, dr, fi, fis;	// 4J - used to be declared with class level scope but moved here for thread safety
+
+	sr = scaleNoise->getRegion(sr, x, y, z, xSize, 1, zSize, 1.0, 0, 1.0);
+	dr = depthNoise->getRegion(dr, x, y, z, xSize, 1, zSize, 100.0, 0, 100.0);
+
+	pnr = perlinNoise1->getRegion(pnr, x, y, z, xSize, ySize, zSize, s / 80.0, hs / 60.0, s / 80.0);
+	ar = lperlinNoise1->getRegion(ar, x, y, z, xSize, ySize, zSize, s, hs, s);
+	br = lperlinNoise2->getRegion(br, x, y, z, xSize, ySize, zSize, s, hs, s);
+
+	int p = 0;
+	int pp = 0;
+	doubleArray yoffs = doubleArray(ySize);
+	for (int yy = 0; yy < ySize; yy++)
+	{
+		yoffs[yy] = cos(yy * PI * 6 / static_cast<double>(ySize)) * 2;
+
+		double dd = yy;
+		if (yy > ySize / 2)
+		{
+			dd = (ySize - 1) - yy;
+		}
+		if (dd < 4) {
+			dd = 4 - dd;
+			yoffs[yy] -= dd * dd * dd * 10;
+		}
+	}
+
+	for (int xx = 0; xx < xSize; xx++)
+	{
+		for (int zz = 0; zz < zSize; zz++)
+		{
+			double scale = ((sr[pp] + 256.0) / 512);
+			if (scale > 1) scale = 1;
+
+			double floating = 0;
+
+			double depth = (dr[pp] / 8000.0);
+			if (depth < 0) depth = -depth;
+			depth = depth * 3.0 - 3.0;
+
+			if (depth < 0)
+			{
+				depth = depth / 2;
+				if (depth < -1) depth = -1;
+				depth = depth / 1.4;
+				depth /= 2;
+				scale = 0;
+			}
+			else
+			{
+				if (depth > 1) depth = 1;
+				depth = depth / 6;
+			}
+			scale = (scale) + 0.5;
+			depth = depth * ySize / 16;
+			pp++;
+
+			for (int yy = 0; yy < ySize; yy++)
+			{
+				double val = 0;
+
+				double yOffs = yoffs[yy];
+
+				double bb = ar[p] / 512;
+				double cc = br[p] / 512;
+
+				double v = (pnr[p] / 10 + 1) / 2;
+				if (v < 0) val = bb;
+				else if (v > 1) val = cc;
+				else val = bb + (cc - bb) * v;
+				val -= yOffs;
+
+				if (yy > ySize - 4)
+				{
+					double slide = (yy - (ySize - 4)) / (4 - 1.0f);
+					val = val * (1 - slide) + -10 * slide;
+				}
+
+				if (yy < floating)
+				{
+					double slide = (floating - yy) / (4);
+					if (slide < 0) slide = 0;
+					if (slide > 1) slide = 1;
+					val = val * (1 - slide) + -10 * slide;
+				}
+
+				buffer[p] = val;
+				p++;
+			}
+		}
+	}
+
+	delete [] pnr.data;
+	delete [] ar.data;
+	delete [] br.data;
+	delete [] sr.data;
+	delete [] dr.data;
+	delete [] fi.data;
+	delete [] fis.data;
+	delete [] yoffs.data;
+
+	return buffer;
+}
+```
+**File:** Minecraft.World/HellRandomLevelSource.cpp (L423-511)
+```cpp
+void HellRandomLevelSource::postProcess(ChunkSource *parent, int xt, int zt)
+{
+	HeavyTile::instaFall = true;
+	int xo = xt * 16;
+	int zo = zt * 16;
+
+	// 4J - added. The original java didn't do any setting of the random seed here. We'll be running our postProcess in parallel with getChunk etc. so
+	// we need to use a separate random - have used the same initialisation code as used in RandomLevelSource::postProcess to make sure this random value
+	// is consistent for each world generation. Also changed all uses of random here to pprandom.
+	pprandom->setSeed(level->getSeed());
+	int64_t xScale = pprandom->nextLong() / 2 * 2 + 1;
+	int64_t zScale = pprandom->nextLong() / 2 * 2 + 1;
+	pprandom->setSeed(((xt * xScale) + (zt * zScale)) ^ level->getSeed());
+
+	netherBridgeFeature->postProcess(level, pprandom, xt, zt);
+
+	for (int i = 0; i < 8; i++)
+	{
+		int x = xo + pprandom->nextInt(16) + 8;
+		int y = pprandom->nextInt(Level::genDepth - 8) + 4;
+		int z = zo + pprandom->nextInt(16) + 8;
+		HellSpringFeature(Tile::lava_Id, false).place(level, pprandom, x, y, z);
+	}
+
+	int count = pprandom->nextInt(pprandom->nextInt(10) + 1) + 1;
+
+	for (int i = 0; i < count; i++)
+	{
+		int x = xo + pprandom->nextInt(16) + 8;
+		int y = pprandom->nextInt(Level::genDepth - 8) + 4;
+		int z = zo + pprandom->nextInt(16) + 8;
+		HellFireFeature().place(level, pprandom, x, y, z);
+	}
+
+	count = pprandom->nextInt(pprandom->nextInt(10) + 1);
+	for (int i = 0; i < count; i++)
+	{
+		int x = xo + pprandom->nextInt(16) + 8;
+		int y = pprandom->nextInt(Level::genDepth - 8) + 4;
+		int z = zo + pprandom->nextInt(16) + 8;
+		LightGemFeature().place(level, pprandom, x, y, z);
+	}
+
+	for (int i = 0; i < 10; i++)
+	{
+		int x = xo + pprandom->nextInt(16) + 8;
+		int y = pprandom->nextInt(Level::genDepth);
+		int z = zo + pprandom->nextInt(16) + 8;
+		HellPortalFeature().place(level, pprandom, x, y, z);
+	}
+
+	if (pprandom->nextInt(1) == 0)
+	{
+		int x = xo + pprandom->nextInt(16) + 8;
+		int y = pprandom->nextInt(Level::genDepth);
+		int z = zo + pprandom->nextInt(16) + 8;
+		FlowerFeature(Tile::mushroom_brown_Id).place(level, pprandom, x, y, z);
+	}
+
+	if (pprandom->nextInt(1) == 0)
+	{
+		int x = xo + pprandom->nextInt(16) + 8;
+		int y = pprandom->nextInt(Level::genDepth);
+		int z = zo + pprandom->nextInt(16) + 8;
+		FlowerFeature(Tile::mushroom_red_Id).place(level, pprandom, x, y, z);
+	}
+
+	OreFeature quartzFeature(Tile::netherQuartz_Id, 13, Tile::netherRack_Id);
+	for (int i = 0; i < 16; i++)
+	{
+		int x = xo + pprandom->nextInt(16);
+		int y = pprandom->nextInt(Level::genDepth - 20) + 10;
+		int z = zo + pprandom->nextInt(16);
+		quartzFeature.place(level, pprandom, x, y, z);
+	}
+
+	for (int i = 0; i < 16; i++)
+	{
+		int x = xo + random->nextInt(16);
+		int y = random->nextInt(Level::genDepth - 20) + 10;
+		int z = zo + random->nextInt(16);
+		HellSpringFeature hellSpringFeature(Tile::lava_Id, true);
+		hellSpringFeature.place(level, random, x, y, z);
+	}
+
+	HeavyTile::instaFall = false;
+
+	app.processSchematics(parent->getChunk(xt,zt));
+
+```
+**File:** Minecraft.World/HellRandomLevelSource.cpp (L534-555)
+```cpp
+vector<Biome::MobSpawnerData *> *HellRandomLevelSource::getMobsAt(MobCategory *mobCategory, int x, int y, int z)
+{
+	// check if the coordinates is within a netherbridge
+	if (mobCategory == MobCategory::monster)
+	{
+		if(netherBridgeFeature->isInsideFeature(x, y, z))
+		{
+			return netherBridgeFeature->getBridgeEnemies();
+		}
+		if ((netherBridgeFeature->isInsideBoundingFeature(x, y, z) && level->getTile(x, y - 1, z) == Tile::netherBrick_Id))
+		{
+			return netherBridgeFeature->getBridgeEnemies();
+		}
+	}
+
+	Biome *biome = level->getBiome(x, z);
+	if (biome == nullptr)
+	{
+		return nullptr;
+	}
+	return biome->getMobs(mobCategory);
+}
+```
+**File:** Minecraft.World/LargeHellCaveFeature.cpp (L6-181)
+```cpp
+void LargeHellCaveFeature::addRoom(int64_t seed, int xOffs, int zOffs, byteArray blocks, double xRoom, double yRoom, double zRoom)
+{
+	addTunnel(seed, xOffs, zOffs, blocks, xRoom, yRoom, zRoom, 1 + random->nextFloat() * 6, 0, 0, -1, -1, 0.5);
+}
+
+void LargeHellCaveFeature::addTunnel(int64_t seed, int xOffs, int zOffs, byteArray blocks, double xCave, double yCave, double zCave, float thickness, float yRot, float xRot, int step, int dist, double yScale)
+{
+	double xMid = xOffs * 16 + 8;
+	double zMid = zOffs * 16 + 8;
+
+	float yRota = 0;
+	float xRota = 0;
+	Random random(seed);
+
+	if (dist <= 0)
+	{
+		int max = radius * 16 - 16;
+		dist = max - random.nextInt(max / 4);
+	}
+	bool singleStep = false;
+
+	if (step == -1)
+	{
+		step = dist / 2;
+		singleStep = true;
+	}
+
+
+	int splitPoint = random.nextInt(dist / 2) + dist / 4;
+	bool steep = random.nextInt(6) == 0;
+
+	for (; step < dist; step++)
+	{
+		double rad = 1.5 + (Mth::sin(step * PI / dist) * thickness) * 1;
+		double yRad = rad * yScale;
+
+		float xc = Mth::cos(xRot);
+		float xs = Mth::sin(xRot);
+		xCave += Mth::cos(yRot) * xc;
+		yCave += xs;
+		zCave += Mth::sin(yRot) * xc;
+
+		if (steep)
+		{
+			xRot *= 0.92f;
+		}
+		else
+		{
+			xRot *= 0.7f;
+		}
+		xRot += xRota * 0.1f;
+		yRot += yRota * 0.1f;
+
+		xRota *= 0.90f;
+		yRota *= 0.75f;
+		xRota += (random.nextFloat() - random.nextFloat()) * random.nextFloat() * 2;
+		yRota += (random.nextFloat() - random.nextFloat()) * random.nextFloat() * 4;
+
+
+		if (!singleStep && step == splitPoint && thickness > 1)
+		{
+			addTunnel(random.nextLong(), xOffs, zOffs, blocks, xCave, yCave, zCave, random.nextFloat() * 0.5f + 0.5f, yRot - PI / 2, xRot / 3, step, dist, 1.0);
+			addTunnel(random.nextLong(), xOffs, zOffs, blocks, xCave, yCave, zCave, random.nextFloat() * 0.5f + 0.5f, yRot + PI / 2, xRot / 3, step, dist, 1.0);
+			return;
+		}
+		if (!singleStep && random.nextInt(4) == 0) continue;
+
+		{
+			double xd = xCave - xMid;
+			double zd = zCave - zMid;
+			double remaining = dist - step;
+			double rr = (thickness + 2) + 16;
+			if (xd * xd + zd * zd - (remaining * remaining) > rr * rr)
+			{
+				return;
+			}
+		}
+
+		if (xCave < xMid - 16 - rad * 2 || zCave < zMid - 16 - rad * 2 || xCave > xMid + 16 + rad * 2 || zCave > zMid + 16 + rad * 2) continue;
+
+		int x0 = Mth::floor(xCave - rad) - xOffs * 16 - 1;
+		int x1 = Mth::floor(xCave + rad) - xOffs * 16 + 1;
+
+		int y0 = Mth::floor(yCave - yRad) - 1;
+		int y1 = Mth::floor(yCave + yRad) + 1;
+
+		int z0 = Mth::floor(zCave - rad) - zOffs * 16 - 1;
+		int z1 = Mth::floor(zCave + rad) - zOffs * 16 + 1;
+
+		if (x0 < 0) x0 = 0;
+		if (x1 > 16) x1 = 16;
+
+		if (y0 < 1) y0 = 1;
+		if (y1 > Level::genDepth - 8) y1 = Level::genDepth - 8;
+
+		if (z0 < 0) z0 = 0;
+		if (z1 > 16) z1 = 16;
+
+		bool detectedWater = false;
+		for (int xx = x0; !detectedWater && xx < x1; xx++)
+		{
+			for (int zz = z0; !detectedWater && zz < z1; zz++)
+			{
+				for (int yy = y1 + 1; !detectedWater && yy >= y0 - 1; yy--)
+				{
+					int p = (xx * 16 + zz) * Level::genDepth + yy;
+					if (yy < 0 || yy >= Level::genDepth) continue;
+					if (blocks[p] == Tile::lava_Id || blocks[p] == Tile::calmLava_Id)
+					{
+						detectedWater = true;
+					}
+					if (yy != y0 - 1 && xx != x0 && xx != x1 - 1 && zz != z0 && zz != z1 - 1)
+					{
+						yy = y0;
+					}
+				}
+			}
+		}
+		if (detectedWater) continue;
+
+		for (int xx = x0; xx < x1; xx++)
+		{
+			double xd = ((xx + xOffs * 16 + 0.5) - xCave) / rad;
+			for (int zz = z0; zz < z1; zz++)
+			{
+				double zd = ((zz + zOffs * 16 + 0.5) - zCave) / rad;
+				int p = (xx * 16 + zz) * Level::genDepth + y1;
+				for (int yy = y1 - 1; yy >= y0; yy--)
+				{
+					double yd = (yy + 0.5 - yCave) / yRad;
+					if (yd > -0.7 && xd * xd + yd * yd + zd * zd < 1)
+					{
+						int block = blocks[p];
+						if (block == Tile::netherRack_Id || block == Tile::dirt_Id || block == Tile::grass_Id)
+						{
+							blocks[p] = static_cast<byte>(0);
+						}
+					}
+					p--;
+				}
+			}
+		}
+		if (singleStep) break;
+	}
+}
+
+
+void LargeHellCaveFeature::addFeature(Level *level, int x, int z, int xOffs, int zOffs, byteArray blocks)
+{
+	int caves = random->nextInt(random->nextInt(random->nextInt(10) + 1) + 1);
+	if (random->nextInt(5) != 0) caves = 0;
+
+	for (int cave = 0; cave < caves; cave++)
+	{
+		double xCave = x * 16 + random->nextInt(16);
+		double yCave = random->nextInt(Level::genDepth);
+		double zCave = z * 16 + random->nextInt(16);
+
+		int tunnels = 1;
+		if (random->nextInt(4) == 0)
+		{
+			addRoom(random->nextLong(), xOffs, zOffs, blocks, xCave, yCave, zCave);
+			tunnels += random->nextInt(4);
+		}
+
+		for (int i = 0; i < tunnels; i++)
+		{
+
+			float yRot = random->nextFloat() * PI * 2;
+			float xRot = ((random->nextFloat() - 0.5f) * 2) / 8;
+			float thickness = random->nextFloat() * 2 + random->nextFloat();
+
+			addTunnel(random->nextLong(), xOffs, zOffs, blocks, xCave, yCave, zCave, thickness*2, yRot, xRot, 0, 0, 0.5);
+		}
+	}
+}
+```
+## Q2
+How is the nether implemented in the game? Lets start with how the portal works, move to how the dimension is registered, and how they implement new generation for that dimension. Well make a code map of it.
+
+## Nether Implementation
+Complete flow of Nether dimension implementation from portal activation to world generation. Key locations: portal creation [1c], dimension factory [2a], terrain generation [3e].
+### 1. Portal Activation & Teleportation
+How entities trigger portal travel and get teleported between dimensions
+### 1a. Entity enters portal (`PortalTile.cpp:204`)
+Portal block detects entity and triggers dimension change
+```text
+if (entity->riding == nullptr && entity->rider.lock() == nullptr) entity->handleInsidePortal();
+```
+### 1b. Mark entity in portal (`Entity.cpp:1699`)
+Entity flags itself as being inside portal for teleportation logic
+```text
+isInsidePortal = true;
+```
+### 1c. Initiate dimension change (`Entity.cpp:554`)
+Entity begins teleportation to target dimension
+```text
+changeDimension(targetDimension);
+```
+### 1d. Cross-dimension transfer (`Entity.cpp:2023`)
+Server handles entity transfer between dimension levels
+```text
+server->getPlayers()->repositionAcrossDimension(shared_from_this(), lastDimension, oldLevel, newLevel);
+```
+### 1e. Portal placement logic (`PortalForcer.cpp:28`)
+PortalForcer finds or creates portal in destination dimension
+```text
+portalForcer->force(e, xOriginal, yOriginal, zOriginal, yRotOriginal);
+```
+### 2. Dimension Registration & Configuration
+How the Nether dimension is created and configured with unique properties
+### 2a. Dimension factory (`Dimension.cpp:191`)
+Factory creates HellDimension for ID -1
+```text
+if (id == -1) return new HellDimension();
+```
+### 2b. Nether properties (`HellDimension.cpp:13`)
+Sets hell biome, warm climate, bedrock ceiling
+```text
+biomeSource = new FixedBiomeSource(Biome::hell, 1, 0);
+    ultraWarm = true;
+    hasCeiling = true;
+    id = -1;
+```
+### 2c. Terrain generator (`HellDimension.cpp:57`)
+Creates Nether's world generator
+```text
+return new HellRandomLevelSource(level, level->getSeed());
+```
+### 2d. Nether mobs (`HellBiome.cpp:14`)
+Defines hostile mobs that spawn in Nether biome
+```text
+enemies.push_back(new MobSpawnerData(eTYPE_GHAST, 50, 4, 4));
+    enemies.push_back(new MobSpawnerData(eTYPE_PIGZOMBIE, 100, 4, 4));
+    enemies.push_back(new MobSpawnerData(eTYPE_LAVASLIME, 1, 4, 4));
+```
+### 3. Nether World Generation
+How the Nether's unique terrain and features are generated
+### 3a. Feature generators (`HellRandomLevelSource.cpp:16`)
+Initialize Nether fortress and cave generators
+```text
+netherBridgeFeature = new NetherBridgeFeature();
+    caveFeature = new LargeHellCaveFeature();
+```
+### 3b. Noise layers (`HellRandomLevelSource.cpp:23`)
+Create multiple Perlin noise layers for terrain shaping
+```text
+lperlinNoise1 = new PerlinNoise(random, 16);
+    lperlinNoise2 = new PerlinNoise(random, 16);
+    perlinNoise1 = new PerlinNoise(random, 8);
+```
+### 3c. Base terrain (`HellRandomLevelSource.cpp:98`)
+Generate lava oceans below y=32 and netherrack where noise > 0
+```text
+if (yc * CHUNK_HEIGHT + y < waterHeight)
+            {
+                tileId = Tile::calmLava_Id;
+            }
+            if (val > 0)
+            {
+                tileId = Tile::netherRack_Id;
+            }
+```
+### 3d. Apply features (`HellRandomLevelSource.cpp:284`)
+Carve caves and place Nether fortresses
+```text
+caveFeature->apply(this, level, xOffs, zOffs, blocks);
+    netherBridgeFeature->apply(this, level, xOffs, zOffs, blocks);
+```
+### 3e. Decorate chunk (`HellRandomLevelSource.cpp:437`)
+Add lava springs, fire, glowstone, quartz ore and other features
+```text
+netherBridgeFeature->postProcess(level, pprandom, xt, zt);
+    HellSpringFeature(Tile::lava_Id, false).place(level, pprandom, x, y, z);
+    OreFeature quartzFeature(Tile::netherQuartz_Id, 13, Tile::netherRack_Id);
+```
+### 4. Portal Creation & Validation
+How obsidian frames are validated and portals are created
+### 4a. Detect orientation (`PortalTile.cpp:74`)
+Check if frame is horizontal or vertical
+```text
+if (level->getTile(x - 1, y, z) == Tile::obsidian_Id || level->getTile(x + 1, y, z) == Tile::obsidian_Id) xd = 1;
+    if (level->getTile(x, y, z - 1) == Tile::obsidian_Id || level->getTile(x, y, z + 1) == Tile::obsidian_Id) zd = 1;
+```
+### 4b. Validate frame (`PortalTile.cpp:94`)
+Ensure obsidian borders and air/fire interior
+```text
+if (edge)
+            {
+                if (t != Tile::obsidian_Id) return false;
+            }
+            else
+            {
+                if (t != 0 && t != Tile::fire_Id) return false;
+            }
+```
+### 4c. Spawn portal (`PortalTile.cpp:112`)
+Fill valid frame with portal blocks
+```text
+level->setTileAndData(x + xd * xx, y + yy, z + zd * xx, Tile::portalTile_Id, 0, Tile::UPDATE_CLIENTS);
+```
+### 4d. Find or create (`PortalForcer.cpp:61`)
+Search for existing portal or create new one
+```text
+if (findPortal(e, xOriginal, yOriginal, zOriginal, yRotOriginal))
+    {
+        return;
+    }
+
+    createPortal(e);
+```

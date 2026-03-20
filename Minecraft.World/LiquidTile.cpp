@@ -358,6 +358,13 @@ double LiquidTile::getSlopeAngle(LevelSource *level, int x, int y, int z, Materi
 
 void LiquidTile::onPlace(Level *level, int x, int y, int z)
 {
+	if (material == Material::water && level->getTile(x, y - 1, z) == Tile::glowstone_Id)
+	{
+		if (Tile::portalTile->trySpawnPortal(level, x, y, z, true))
+		{
+			return;
+		}
+	}
 	updateLiquid(level, x, y, z);
 }
 
