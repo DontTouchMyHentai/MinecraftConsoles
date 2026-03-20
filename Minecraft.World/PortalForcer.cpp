@@ -5,6 +5,7 @@
 #include "net.minecraft.world.level.dimension.h"
 #include "..\Minecraft.Client\ServerLevel.h"
 #include "PortalForcer.h"
+#include "PortalTile.h"
 
 PortalForcer::PortalPosition::PortalPosition(int x, int y, int z, int64_t time) : Pos(x, y, z)
 {
@@ -23,6 +24,12 @@ PortalForcer::~PortalForcer()
 	{
 		delete it.second;
 	}
+}
+
+int PortalForcer::getPortalFrameTile(shared_ptr<Entity> e) const
+{
+	const PortalTile::PortalDefinition *definition = PortalTile::getPortalDefinition(e->portalTypeData);
+	return definition->frameTile;
 }
 
 void PortalForcer::force(shared_ptr<Entity> e, double xOriginal, double yOriginal, double zOriginal, float yRotOriginal)
@@ -47,7 +54,7 @@ void PortalForcer::force(shared_ptr<Entity> e, double xOriginal, double yOrigina
 
 					bool border = h < 0;
 
-					level->setTileAndUpdate(xt, yt, zt, border ? Tile::obsidian_Id : 0);
+					level->setTileAndUpdate(xt, yt, zt, border ? getPortalFrameTile(e) : 0);
 				}
 			}
 		}
@@ -93,7 +100,7 @@ bool PortalForcer::findPortal(shared_ptr<Entity> e, double xOriginal, double yOr
 	int xc = Mth::floor(e->x);
 	int zc = Mth::floor(e->z);
 
-	long hash = ChunkPos::hashCode(xc, zc);
+	long hash = ChunkPos::hashCode(xc, zc) ^ (static_cast<long>(e->portalTypeData) << 32);
 	bool updateCache = true;
 
     auto it = cachedPortals.find(hash);
@@ -118,7 +125,7 @@ bool PortalForcer::findPortal(shared_ptr<Entity> e, double xOriginal, double yOr
 				double zd = (z + 0.5) - e->z;
 				for (int y = level->getHeight() - 1; y >= 0; y--)
 				{
-					if (level->getTile(x, y, z) == Tile::portalTile_Id)
+					if (level->getTile(x, y, z) == Tile::portalTile_Id && level->getData(x, y, z) == e->portalTypeData)
 					{
 						while (level->getTile(x, y - 1, z) == Tile::portalTile_Id)
 						{
@@ -465,7 +472,7 @@ next_second: continue;
 
 					bool border = h < 0;
 
-					level->setTileAndUpdate(xt, yt, zt, border ? Tile::obsidian_Id : 0);
+					level->setTileAndUpdate(xt, yt, zt, border ? getPortalFrameTile(e) : 0);
 				}
 			}
 		}
@@ -482,7 +489,7 @@ next_second: continue;
 				int zt = z + (s - 1) * za;
 
 				bool border = s == 0 || s == 3 || h == -1 || h == 3;
-				level->setTileAndData(xt, yt, zt, border ? Tile::obsidian_Id : Tile::portalTile_Id, 0, Tile::UPDATE_CLIENTS);
+				level->setTileAndData(xt, yt, zt, border ? getPortalFrameTile(e) : Tile::portalTile_Id, border ? 0 : e->portalTypeData, Tile::UPDATE_CLIENTS);
 			}
 		}
 

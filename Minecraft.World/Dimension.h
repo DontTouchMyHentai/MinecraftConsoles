@@ -12,6 +12,12 @@ class LevelType;
 class Dimension
 {
 public:
+	static const int NETHER_ID = -1;
+	static const int OVERWORLD_ID = 0;
+	static const int END_ID = 1;
+	static const int AETHER_ID = 2;
+	static int getLevelIndex(int id);
+
 	static const float MOON_BRIGHTNESS_PER_PHASE[8];
 
 	Level *level;
