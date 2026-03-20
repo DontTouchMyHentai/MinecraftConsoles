@@ -19,7 +19,7 @@ PortalTile::PortalTile(int id) : HalfTransparentTile(id, L"portal", Material::po
 
 const PortalTile::PortalDefinition *PortalTile::getPortalDefinition(int data)
 {
-	for (int i = 0; i < ARRAY_SIZE(PORTAL_DEFINITIONS); i++)
+	for (int i = 0; i < std::size(PORTAL_DEFINITIONS); i++)
 	{
 		if (PORTAL_DEFINITIONS[i].data == data) return &PORTAL_DEFINITIONS[i];
 	}
@@ -118,7 +118,7 @@ bool PortalTile::isCubeShaped()
 
 bool PortalTile::trySpawnPortal(Level *level, int x, int y, int z, bool actuallySpawn)
 {
-	for (int i = 0; i < ARRAY_SIZE(PORTAL_DEFINITIONS); i++)
+	for (int i = 0; i < std::size(PORTAL_DEFINITIONS); i++)
 	{
 		const PortalDefinition &definition = PORTAL_DEFINITIONS[i];
 		int xd = 0;
