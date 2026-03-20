@@ -11,6 +11,7 @@ public:
 	{
 		int data;
 		int frameTile;
+		int igniter;
 		int primaryDimension;
 		int returnDimension;
 		int color;

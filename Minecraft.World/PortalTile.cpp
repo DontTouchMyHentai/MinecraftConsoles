@@ -8,8 +8,8 @@
 
 static const PortalTile::PortalDefinition PORTAL_DEFINITIONS[] =
 {
-	{ PortalTile::PORTAL_DATA_NETHER, Tile::obsidian_Id, Dimension::NETHER_ID, Dimension::OVERWORLD_ID, 0xD07CFF },
-	{ PortalTile::PORTAL_DATA_AETHER, Tile::glowstone_Id, Dimension::AETHER_ID, Dimension::OVERWORLD_ID, 0x66CCFF },
+	{ PortalTile::PORTAL_DATA_NETHER, Tile::obsidian_Id, Tile::fire_Id, Dimension::NETHER_ID, Dimension::OVERWORLD_ID, 0xD07CFF },
+	{ PortalTile::PORTAL_DATA_AETHER, Tile::glowstone_Id, Tile::water_Id, Dimension::AETHER_ID, Dimension::OVERWORLD_ID, 0x66CCFF },
 };
 
 PortalTile::PortalTile(int id) : HalfTransparentTile(id, L"portal", Material::portal, false)
@@ -153,7 +153,7 @@ bool PortalTile::trySpawnPortal(Level *level, int x, int y, int z, bool actually
 						break;
 					}
 				}
-				else if (t != 0 && t != Tile::fire_Id)
+				else if (t != 0 && t != definition.igniter)
 				{
 					valid = false;
 					break;
