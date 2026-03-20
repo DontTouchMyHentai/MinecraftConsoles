@@ -6,9 +6,58 @@
 #include "PortalTile.h"
 #include "FireTile.h"
 
+static const PortalTile::PortalDefinition PORTAL_DEFINITIONS[] =
+{
+	{ PortalTile::PORTAL_DATA_NETHER, Tile::obsidian_Id, Dimension::NETHER_ID, Dimension::OVERWORLD_ID, 0xD07CFF },
+	{ PortalTile::PORTAL_DATA_AETHER, Tile::glowstone_Id, Dimension::AETHER_ID, Dimension::OVERWORLD_ID, 0x66CCFF },
+};
+
 PortalTile::PortalTile(int id) : HalfTransparentTile(id, L"portal", Material::portal, false)
 {
 	setTicking(true);
+}
+
+const PortalTile::PortalDefinition *PortalTile::getPortalDefinition(int data)
+{
+	for (int i = 0; i < ARRAY_SIZE(PORTAL_DEFINITIONS); i++)
+	{
+		if (PORTAL_DEFINITIONS[i].data == data) return &PORTAL_DEFINITIONS[i];
+	}
+
+	return &PORTAL_DEFINITIONS[0];
+}
+
+int PortalTile::getPortalTargetDimension(int data, int sourceDimension)
+{
+	const PortalDefinition *definition = getPortalDefinition(data);
+	if (sourceDimension == definition->primaryDimension) return definition->returnDimension;
+	return definition->primaryDimension;
+}
+
+int PortalTile::getDefaultPortalDataForDimension(int sourceDimension)
+{
+	if (sourceDimension == Dimension::AETHER_ID) return PORTAL_DATA_AETHER;
+	return PORTAL_DATA_NETHER;
+}
+
+int PortalTile::getColor() const
+{
+	return getPortalDefinition(PORTAL_DATA_NETHER)->color;
+}
+
+int PortalTile::getColor(int auxData)
+{
+	return getPortalDefinition(auxData)->color;
+}
+
+int PortalTile::getColor(LevelSource *level, int x, int y, int z)
+{
+	return getColor(level, x, y, z, level->getData(x, y, z));
+}
+
+int PortalTile::getColor(LevelSource *level, int x, int y, int z, int data)
+{
+	return getPortalDefinition(data)->color;
 }
 
 void PortalTile::tick(Level *level, int x, int y, int z, Random *random)
@@ -69,56 +118,69 @@ bool PortalTile::isCubeShaped()
 
 bool PortalTile::trySpawnPortal(Level *level, int x, int y, int z, bool actuallySpawn)
 {
-	int xd = 0;
-	int zd = 0;
-	if (level->getTile(x - 1, y, z) == Tile::obsidian_Id || level->getTile(x + 1, y, z) == Tile::obsidian_Id) xd = 1;
-	if (level->getTile(x, y, z - 1) == Tile::obsidian_Id || level->getTile(x, y, z + 1) == Tile::obsidian_Id) zd = 1;
-
-	if (xd == zd) return false;
-
-	if (level->getTile(x - xd, y, z - zd) == 0)
+	for (int i = 0; i < ARRAY_SIZE(PORTAL_DEFINITIONS); i++)
 	{
-		x -= xd;
-		z -= zd;
-	}
+		const PortalDefinition &definition = PORTAL_DEFINITIONS[i];
+		int xd = 0;
+		int zd = 0;
+		if (level->getTile(x - 1, y, z) == definition.frameTile || level->getTile(x + 1, y, z) == definition.frameTile) xd = 1;
+		if (level->getTile(x, y, z - 1) == definition.frameTile || level->getTile(x, y, z + 1) == definition.frameTile) zd = 1;
 
-	for (int xx = -1; xx <= 2; xx++)
-	{
-		for (int yy = -1; yy <= 3; yy++)
+		if (xd == zd) continue;
+
+		int xPortal = x;
+		int zPortal = z;
+		if (level->getTile(xPortal - xd, y, zPortal - zd) == 0)
 		{
-			bool edge = (xx == -1) || (xx == 2) || (yy == -1) || (yy == 3);
-			if ((xx == -1 || xx == 2) && (yy == -1 || yy == 3)) continue;
+			xPortal -= xd;
+			zPortal -= zd;
+		}
 
-			int t = level->getTile(x + xd * xx, y + yy, z + zd * xx);
+		bool valid = true;
+		for (int xx = -1; xx <= 2 && valid; xx++)
+		{
+			for (int yy = -1; yy <= 3; yy++)
+			{
+				bool edge = (xx == -1) || (xx == 2) || (yy == -1) || (yy == 3);
+				if ((xx == -1 || xx == 2) && (yy == -1 || yy == 3)) continue;
 
-			if (edge)
-			{
-				if (t != Tile::obsidian_Id) return false;
-			}
-			else
-			{
-				if (t != 0 && t != Tile::fire_Id) return false;
+				int t = level->getTile(xPortal + xd * xx, y + yy, zPortal + zd * xx);
+				if (edge)
+				{
+					if (t != definition.frameTile)
+					{
+						valid = false;
+						break;
+					}
+				}
+				else if (t != 0 && t != Tile::fire_Id)
+				{
+					valid = false;
+					break;
+				}
 			}
 		}
-	}
 
-	if( !actuallySpawn )
+		if (!valid) continue;
+		if (!actuallySpawn) return true;
+
+		for (int xx = 0; xx < 2; xx++)
+		{
+			for (int yy = 0; yy < 3; yy++)
+			{
+				level->setTileAndData(xPortal + xd * xx, y + yy, zPortal + zd * xx, Tile::portalTile_Id, definition.data, Tile::UPDATE_CLIENTS);
+			}
+		}
+
 		return true;
-
-	for (int xx = 0; xx < 2; xx++)
-	{
-		for (int yy = 0; yy < 3; yy++)
-		{
-			level->setTileAndData(x + xd * xx, y + yy, z + zd * xx, Tile::portalTile_Id, 0, Tile::UPDATE_CLIENTS);
-		}
 	}
 
-	return true;
-
+	return false;
 }
 
 void PortalTile::neighborChanged(Level *level, int x, int y, int z, int type)
 {
+	const PortalDefinition *definition = getPortalDefinition(level->getData(x, y, z));
 	int xd = 0;
 	int zd = 1;
 	if (level->getTile(x - 1, y, z) == id || level->getTile(x + 1, y, z) == id)
@@ -131,7 +193,7 @@ void PortalTile::neighborChanged(Level *level, int x, int y, int z, int type)
 	while (level->getTile(x, yBottom - 1, z) == id)
 		yBottom--;
 
-	if (level->getTile(x, yBottom - 1, z) != Tile::obsidian_Id)
+	if (level->getTile(x, yBottom - 1, z) != definition->frameTile)
 	{
 		level->removeTile(x, y, z);
 		return;
@@ -141,7 +203,7 @@ void PortalTile::neighborChanged(Level *level, int x, int y, int z, int type)
 	while (height < 4 && level->getTile(x, yBottom + height, z) == id)
 		height++;
 
-	if (height != 3 || level->getTile(x, yBottom + height, z) != Tile::obsidian_Id)
+	if (height != 3 || level->getTile(x, yBottom + height, z) != definition->frameTile)
 	{
 		level->removeTile(x, y, z);
 		return;
@@ -156,8 +218,8 @@ void PortalTile::neighborChanged(Level *level, int x, int y, int z, int type)
 	}
 
 	if (!(//
-		(level->getTile(x + xd, y, z + zd) == Tile::obsidian_Id && level->getTile(x - xd, y, z - zd) == id) || //
-		(level->getTile(x - xd, y, z - zd) == Tile::obsidian_Id && level->getTile(x + xd, y, z + zd) == id)//
+		(level->getTile(x + xd, y, z + zd) == definition->frameTile && level->getTile(x - xd, y, z - zd) == id) || //
+		(level->getTile(x - xd, y, z - zd) == definition->frameTile && level->getTile(x + xd, y, z + zd) == id)//
 		))
 	{
 		level->removeTile(x, y, z);
@@ -201,6 +263,7 @@ void PortalTile::entityInside(Level *level, int x, int y, int z, shared_ptr<Enti
 {
 	if (entity->GetType() == eTYPE_EXPERIENCEORB ) return;		// 4J added
 
+	entity->portalTypeData = level->getData(x, y, z);
 	if (entity->riding == nullptr && entity->rider.lock() == nullptr) entity->handleInsidePortal();
 }
 

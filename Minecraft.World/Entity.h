@@ -103,6 +103,7 @@ protected:
 public:
 	int tickCount;
 	int flameTime;
+	int portalTypeData;
 
 private:
 	int onFire;

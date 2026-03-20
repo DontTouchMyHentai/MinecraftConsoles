@@ -1111,6 +1111,7 @@ void UIScene_PauseMenu::_ExitWorld(LPVOID lpParameter)
 			if( pMinecraft->levels[0] != nullptr ) pMinecraft->levels[0]->disconnect(false);
 			if( pMinecraft->levels[1] != nullptr ) pMinecraft->levels[1]->disconnect(false);
 			if( pMinecraft->levels[2] != nullptr ) pMinecraft->levels[2]->disconnect(false);
+			if( pMinecraft->levels[3] != nullptr ) pMinecraft->levels[3]->disconnect(false);
 		}
 		else
 		{
@@ -1119,6 +1120,7 @@ void UIScene_PauseMenu::_ExitWorld(LPVOID lpParameter)
 			if( pMinecraft->levels[0] != nullptr ) pMinecraft->levels[0]->disconnect();
 			if( pMinecraft->levels[1] != nullptr ) pMinecraft->levels[1]->disconnect();
 			if( pMinecraft->levels[2] != nullptr ) pMinecraft->levels[2]->disconnect();
+			if( pMinecraft->levels[3] != nullptr ) pMinecraft->levels[3]->disconnect();
 		}
 
 		// 4J Stu - This only does something if we actually have a server, so don't need to do any other checks

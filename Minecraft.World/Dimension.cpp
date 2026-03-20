@@ -10,11 +10,20 @@
 #include "HellDimension.h"
 #include "NormalDimension.h"
 #include "TheEndDimension.h"
+#include "AetherDimension.h"
 #include "net.minecraft.world.level.tile.h"
 #include "..\Minecraft.Client\Minecraft.h"
 #include "..\Minecraft.Client\Common\Colours\ColourTable.h"
 
 const float Dimension::MOON_BRIGHTNESS_PER_PHASE[8] = {1.0f, 0.75f, 0.5f, 0.25f, 0, 0.25f, 0.5f, 0.75f};
+
+int Dimension::getLevelIndex(int id)
+{
+	if (id == NETHER_ID) return 1;
+	if (id == END_ID) return 2;
+	if (id == AETHER_ID) return 3;
+	return 0;
+}
 
 void Dimension::init(Level *level)
 {
@@ -188,9 +197,10 @@ bool Dimension::mayRespawn() const
 
 Dimension *Dimension::getNew(int id)
 {
-	if (id == -1) return new HellDimension();
-	if (id == 0) return new NormalDimension();
-	if (id == 1) return new TheEndDimension();
+	if (id == NETHER_ID) return new HellDimension();
+	if (id == OVERWORLD_ID) return new NormalDimension();
+	if (id == END_ID) return new TheEndDimension();
+	if (id == AETHER_ID) return new AetherDimension();
 
 	return nullptr;
 }

@@ -17,6 +17,7 @@
 
 #include "EntityPos.h"
 #include "Entity.h"
+#include "PortalTile.h"
 #include "SoundTypes.h"
 #include "..\minecraft.Client\HumanoidModel.h"
 #include "..\Minecraft.Client\MinecraftServer.h"
@@ -342,6 +343,7 @@ void Entity::_init(bool useSmallId, Level *level)
 	changingDimensionDelay = 0;
 	isInsidePortal = false;
 	portalTime = 0;
+	portalTypeData = PortalTile::getDefaultPortalDataForDimension(Dimension::OVERWORLD_ID);
 	dimension = 0;
 	portalEntranceDir = 0;
 	invulnerable = false;
@@ -369,6 +371,7 @@ Entity::Entity(Level *level, bool useSmallId)	// 4J - added useSmallId parameter
 	if (level != nullptr)
 	{
 		dimension = level->dimension->id;
+		portalTypeData = PortalTile::getDefaultPortalDataForDimension(dimension);
 	}
 
 	if( entityData )
@@ -551,16 +554,7 @@ void Entity::baseTick()
 							portalTime = waitTime;
 							changingDimensionDelay = getDimensionChangingDelay();
 
-							int targetDimension;
-
-							if (level->dimension->id == -1)
-							{
-								targetDimension = 0;
-							}
-							else
-							{
-								targetDimension = -1;
-							}
+							int targetDimension = PortalTile::getPortalTargetDimension(portalTypeData, level->dimension->id);
 
 							changeDimension(targetDimension);
 						}
@@ -1993,6 +1987,7 @@ void Entity::restoreFrom(shared_ptr<Entity> oldEntity, bool teleporting)
 	delete tag;
 	changingDimensionDelay = oldEntity->changingDimensionDelay;
 	portalEntranceDir = oldEntity->portalEntranceDir;
+	portalTypeData = oldEntity->portalTypeData;
 }
 
 void Entity::changeDimension(int i)

@@ -23,6 +23,7 @@ public:
 	PortalForcer(ServerLevel *level);
 	~PortalForcer();
 
+	int getPortalFrameTile(shared_ptr<Entity> e) const;
 	void force(shared_ptr<Entity> e, double xOriginal, double yOriginal, double zOriginal, float yRotOriginal);
 	bool findPortal(shared_ptr<Entity> e, double xOriginal, double yOriginal, double zOriginal, float yRotOriginal);
 	bool createPortal(shared_ptr<Entity> e);
