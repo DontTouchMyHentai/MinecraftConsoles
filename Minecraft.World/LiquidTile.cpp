@@ -7,6 +7,9 @@
 #include "LiquidTile.h"
 #include "Facing.h"
 #include "SoundTypes.h"
+#include "PortalTile.h"
+
+
 
 const wstring LiquidTile::TEXTURE_LAVA_STILL = L"lava";
 const wstring LiquidTile::TEXTURE_WATER_STILL = L"water";
@@ -358,7 +361,7 @@ double LiquidTile::getSlopeAngle(LevelSource *level, int x, int y, int z, Materi
 
 void LiquidTile::onPlace(Level *level, int x, int y, int z)
 {
-	if (material == Material::water && level->getTile(x, y - 1, z) == Tile::glowstone_Id)
+	if (material == Material::water)
 	{
 		if (Tile::portalTile->trySpawnPortal(level, x, y, z, true))
 		{
